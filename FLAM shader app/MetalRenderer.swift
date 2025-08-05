@@ -78,7 +78,6 @@ class MetalRenderer {
         encoder.dispatchThreads(threadsPerGrid, threadsPerThreadgroup: threadsPerGroup)
         encoder.endEncoding()
         commandBuffer.commit()
-        commandBuffer.waitUntilCompleted()
         return output
     }
 

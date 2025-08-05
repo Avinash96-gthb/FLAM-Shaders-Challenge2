@@ -12,7 +12,7 @@ class Renderer: NSObject, MTKViewDelegate {
     private let device: MTLDevice
     private let commandQueue: MTLCommandQueue
     private var latestTexture: MTLTexture?
-    private let textureQueue = DispatchQueue(label: "TextureQueue")
+    private let textureQueue = DispatchQueue(label: "TextureQueue", attributes: .concurrent)
 
     init(device: MTLDevice) {
         self.device = device
@@ -26,8 +26,15 @@ class Renderer: NSObject, MTKViewDelegate {
     }
 
     func draw(in view: MTKView) {
+        var currentTexture: MTLTexture?
+        
+        // Synchronously read the texture to avoid concurrency issues
+        textureQueue.sync {
+            currentTexture = self.latestTexture
+        }
+        
         guard let drawable = view.currentDrawable,
-              let texture = latestTexture,
+              let texture = currentTexture,
               let commandBuffer = commandQueue.makeCommandBuffer(),
               let blitEncoder = commandBuffer.makeBlitCommandEncoder() else { return }
 
@@ -48,7 +55,6 @@ class Renderer: NSObject, MTKViewDelegate {
         commandBuffer.present(drawable)
         commandBuffer.commit()
     }
-
 
     func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {
         // Handle resize if needed
