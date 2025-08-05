@@ -40,7 +40,8 @@ class VideoCapture: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
               let inputTexture = renderer.makeTexture(from: pixelBuffer),
               let outputTexture = renderer.applyGrayscale(input: inputTexture) else { return }
 
-        drawRenderer?.updateTexture(outputTexture)
+        DispatchQueue.main.async { [weak self] in
+            self?.drawRenderer?.updateTexture(outputTexture)}
     }
 
     var metalDevice: MTLDevice {

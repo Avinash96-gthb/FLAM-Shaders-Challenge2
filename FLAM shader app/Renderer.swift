@@ -12,6 +12,7 @@ class Renderer: NSObject, MTKViewDelegate {
     private let device: MTLDevice
     private let commandQueue: MTLCommandQueue
     private var latestTexture: MTLTexture?
+    private let textureQueue = DispatchQueue(label: "TextureQueue")
 
     init(device: MTLDevice) {
         self.device = device
@@ -19,7 +20,9 @@ class Renderer: NSObject, MTKViewDelegate {
     }
 
     func updateTexture(_ texture: MTLTexture) {
-        self.latestTexture = texture
+        textureQueue.async(flags: .barrier) { 
+            self.latestTexture = texture
+        }
     }
 
     func draw(in view: MTKView) {
