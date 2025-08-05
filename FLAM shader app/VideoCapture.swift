@@ -12,7 +12,11 @@ import MetalKit
 class VideoCapture: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
     private let captureSession = AVCaptureSession()
     private let renderer = MetalRenderer()!
-    var onFrameAvailable: ((MTLTexture) -> Void)?
+    private var drawRenderer: Renderer?
+
+    func setRenderer(_ renderer: Renderer) {
+        self.drawRenderer = renderer
+    }
 
     func startCapture() {
         captureSession.beginConfiguration()
@@ -36,10 +40,11 @@ class VideoCapture: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
               let inputTexture = renderer.makeTexture(from: pixelBuffer),
               let outputTexture = renderer.applyGrayscale(input: inputTexture) else { return }
 
-        onFrameAvailable?(outputTexture)
+        drawRenderer?.updateTexture(outputTexture)
     }
 
     var metalDevice: MTLDevice {
         renderer.metalDevice
     }
 }
+
