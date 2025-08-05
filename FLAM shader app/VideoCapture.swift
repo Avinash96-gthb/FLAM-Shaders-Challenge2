@@ -5,29 +5,42 @@
 //  Created by A Avinash Chidambaram on 05/08/25.
 //
 
-
 import AVFoundation
 import MetalKit
 
 class VideoCapture: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
     private let captureSession = AVCaptureSession()
     private let renderer = MetalRenderer()!
-    private weak var drawRenderer: Renderer? // Make this weak to prevent retain cycles
+    private weak var drawRenderer: Renderer?
     private let metalQueue = DispatchQueue(label: "MetalProcessing", qos: .userInitiated)
-
+    private var displayLink: CADisplayLink?
+    
     func setRenderer(_ renderer: Renderer) {
         self.drawRenderer = renderer
     }
-
+    
+    func updateShaderSettings(_ settings: ShaderSettings) {
+        renderer.settings = settings
+    }
+    
     func startCapture() {
-        // Check camera permission first
         checkCameraPermission { [weak self] granted in
             guard granted else {
                 print("Camera permission denied")
                 return
             }
             self?.setupCaptureSession()
+            self?.startDisplayLink()
         }
+    }
+    
+    private func startDisplayLink() {
+        displayLink = CADisplayLink(target: self, selector: #selector(updateTime))
+        displayLink?.add(to: .current, forMode: .default)
+    }
+    
+    @objc private func updateTime() {
+        renderer.updateTime()
     }
     
     private func checkCameraPermission(completion: @escaping (Bool) -> Void) {
@@ -79,14 +92,11 @@ class VideoCapture: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
             guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer),
                   let inputTexture = renderer.makeTexture(from: pixelBuffer) else { return }
             
-            // Process asynchronously with better error handling
-            renderer.applyGrayscaleAsync(input: inputTexture) { [weak self] outputTexture in
-                guard let outputTexture = outputTexture,
-                      let self = self else { return }
+            renderer.processTextureAsync(input: inputTexture) { [weak self] outputTexture in
+                guard let outputTexture = outputTexture else { return }
                 
-                // Update UI on main thread
                 DispatchQueue.main.async {
-                    self.drawRenderer?.updateTexture(outputTexture)
+                    self?.drawRenderer?.updateTexture(outputTexture)
                 }
             }
         }
@@ -96,4 +106,3 @@ class VideoCapture: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
         renderer.metalDevice
     }
 }
-

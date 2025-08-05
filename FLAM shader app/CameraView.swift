@@ -5,16 +5,17 @@
 //  Created by A Avinash Chidambaram on 05/08/25.
 //
 
-
 import SwiftUI
 import MetalKit
 
 struct CameraView: UIViewRepresentable {
+    @Binding var shaderSettings: ShaderSettings
     private let videoCapture = VideoCapture()
     private let mtkView = MTKView()
     private let renderer: Renderer
 
-    init() {
+    init(shaderSettings: Binding<ShaderSettings>) {
+        self._shaderSettings = shaderSettings
         guard let device = MTLCreateSystemDefaultDevice() else {
             fatalError("Metal is not supported on this device")
         }
@@ -29,9 +30,8 @@ struct CameraView: UIViewRepresentable {
         mtkView.delegate = renderer
         mtkView.enableSetNeedsDisplay = false
         mtkView.isPaused = false
-        mtkView.preferredFramesPerSecond = 30 // Cap at 30fps for better performance
+        mtkView.preferredFramesPerSecond = 30
 
-        // Start capture after view is set up
         DispatchQueue.main.async {
             self.videoCapture.startCapture()
         }
@@ -39,5 +39,7 @@ struct CameraView: UIViewRepresentable {
         return mtkView
     }
 
-    func updateUIView(_ uiView: MTKView, context: Context) {}
+    func updateUIView(_ uiView: MTKView, context: Context) {
+        videoCapture.updateShaderSettings(shaderSettings)
+    }
 }
