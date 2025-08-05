@@ -16,28 +16,23 @@ struct CameraView: UIViewRepresentable {
     func makeUIView(context: Context) -> MTKView {
         mtkView.device = videoCapture.metalDevice
         mtkView.framebufferOnly = false
-        mtkView.enableSetNeedsDisplay = false
-        mtkView.isPaused = true // We manually draw
+        mtkView.enableSetNeedsDisplay = true
+        mtkView.isPaused = false // We manually draw
 
         videoCapture.onFrameAvailable = { texture in
             DispatchQueue.main.async {
                 self.mtkView.drawableSize = CGSize(width: texture.width, height: texture.height)
-                if let drawable = self.mtkView.currentDrawable {
-                    let commandBuffer = self.videoCapture.metalDevice.makeCommandQueue()?.makeCommandBuffer()
-                    let blitEncoder = commandBuffer?.makeBlitCommandEncoder()
-                    blitEncoder?.copy(from: texture,
-                                      sourceSlice: 0,
-                                      sourceLevel: 0,
-                                      sourceOrigin: MTLOrigin(x: 0, y: 0, z: 0),
-                                      sourceSize: MTLSize(width: texture.width, height: texture.height, depth: 1),
-                                      to: drawable.texture,
-                                      destinationSlice: 0,
-                                      destinationLevel: 0,
-                                      destinationOrigin: MTLOrigin(x: 0, y: 0, z: 0))
-                    blitEncoder?.endEncoding()
-                    commandBuffer?.present(drawable)
-                    commandBuffer?.commit()
+                self.mtkView.draw()
+                guard let drawable = self.mtkView.currentDrawable,
+                      let commandBuffer = self.videoCapture.metalDevice.makeCommandQueue()?.makeCommandBuffer(),
+                      let blitEncoder = commandBuffer.makeBlitCommandEncoder() else {
+                    return
                 }
+                blitEncoder.copy(from: texture, sourceSlice: 0, sourceLevel: 0, sourceOrigin: MTLOrigin(x: 0, y: 0, z: 0), sourceSize: MTLSize(width: texture.width, height: texture.height, depth: 1), to: drawable.texture, destinationSlice: 0, destinationLevel: 0, destinationOrigin: MTLOrigin(x: 0, y: 0, z: 0))
+                blitEncoder.endEncoding()
+                commandBuffer.present(drawable)
+                commandBuffer.commit()
+                
             }
         }
 
