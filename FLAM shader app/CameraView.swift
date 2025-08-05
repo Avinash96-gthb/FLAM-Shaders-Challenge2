@@ -10,15 +10,18 @@ import SwiftUI
 import MetalKit
 
 struct CameraView: UIViewRepresentable {
-    let videoCapture = VideoCapture()
-    let mtkView = MTKView()
-    let renderer: Renderer
+    private let videoCapture = VideoCapture()
+    private let mtkView = MTKView()
+    private let renderer: Renderer
 
     init() {
-        let device = MTLCreateSystemDefaultDevice()!
+        guard let device = MTLCreateSystemDefaultDevice() else {
+            fatalError("Metal is not supported on this device")
+        }
+        
         self.renderer = Renderer(device: device)
         self.mtkView.device = device
-        self.videoCapture.setRenderer(renderer)
+        self.videoCapture.setRenderer(self.renderer)
     }
 
     func makeUIView(context: Context) -> MTKView {
@@ -26,8 +29,12 @@ struct CameraView: UIViewRepresentable {
         mtkView.delegate = renderer
         mtkView.enableSetNeedsDisplay = false
         mtkView.isPaused = false
+        mtkView.preferredFramesPerSecond = 30 // Cap at 30fps for better performance
 
-        videoCapture.startCapture()
+        // Start capture after view is set up
+        DispatchQueue.main.async {
+            self.videoCapture.startCapture()
+        }
 
         return mtkView
     }

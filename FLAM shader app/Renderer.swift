@@ -5,37 +5,44 @@
 //  Created by A Avinash Chidambaram on 05/08/25.
 //
 
-
 import MetalKit
 
 class Renderer: NSObject, MTKViewDelegate {
     private let device: MTLDevice
     private let commandQueue: MTLCommandQueue
     private var latestTexture: MTLTexture?
-    private let textureQueue = DispatchQueue(label: "TextureQueue", attributes: .concurrent)
+    private let textureQueue = DispatchQueue(label: "TextureQueue")
+    private var isDrawing = false
 
     init(device: MTLDevice) {
         self.device = device
         self.commandQueue = device.makeCommandQueue()!
+        super.init()
     }
 
     func updateTexture(_ texture: MTLTexture) {
-        textureQueue.async(flags: .barrier) { 
-            self.latestTexture = texture
+        textureQueue.async { [weak self] in
+            self?.latestTexture = texture
         }
     }
 
     func draw(in view: MTKView) {
+        // Prevent concurrent drawing
+        guard !isDrawing else { return }
+        isDrawing = true
+        
+        defer { isDrawing = false }
+        
         var currentTexture: MTLTexture?
         
-        // Synchronously read the texture to avoid concurrency issues
         textureQueue.sync {
             currentTexture = self.latestTexture
         }
         
         guard let drawable = view.currentDrawable,
-              let texture = currentTexture,
-              let commandBuffer = commandQueue.makeCommandBuffer(),
+              let texture = currentTexture else { return }
+        
+        guard let commandBuffer = commandQueue.makeCommandBuffer(),
               let blitEncoder = commandBuffer.makeBlitCommandEncoder() else { return }
 
         let copyWidth = min(texture.width, drawable.texture.width)

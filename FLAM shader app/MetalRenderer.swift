@@ -14,6 +14,7 @@ class MetalRenderer {
     private let device: MTLDevice
     private let commandQueue: MTLCommandQueue
     private var pipelineState: MTLComputePipelineState!
+    private let processingQueue = DispatchQueue(label: "MetalRenderQueue", qos: .userInitiated)
 
     init?() {
         guard let device = MTLCreateSystemDefaultDevice(),
@@ -25,45 +26,61 @@ class MetalRenderer {
 
         self.device = device
         self.commandQueue = commandQueue
-        self.pipelineState = try? device.makeComputePipelineState(function: function)
+        
+        do {
+            self.pipelineState = try device.makeComputePipelineState(function: function)
+        } catch {
+            print("Failed to create pipeline state: \(error)")
+            return nil
+        }
     }
 
     func makeTexture(from pixelBuffer: CVPixelBuffer) -> MTLTexture? {
-        let textureDescriptor = MTLTextureDescriptor.texture2DDescriptor(
-            pixelFormat: .bgra8Unorm,
-            width: CVPixelBufferGetWidth(pixelBuffer),
-            height: CVPixelBufferGetHeight(pixelBuffer),
-            mipmapped: false)
-        textureDescriptor.usage = [.shaderRead, .shaderWrite]
-        
-        var texture: MTLTexture?
-        var cvTextureOut: CVMetalTexture?
         var textureCache: CVMetalTextureCache?
-        
         CVMetalTextureCacheCreate(nil, nil, device, nil, &textureCache)
         guard let cache = textureCache else { return nil }
 
-        CVMetalTextureCacheCreateTextureFromImage(nil, cache, pixelBuffer, nil, .bgra8Unorm, textureDescriptor.width, textureDescriptor.height, 0, &cvTextureOut)
+        var cvTextureOut: CVMetalTexture?
+        let result = CVMetalTextureCacheCreateTextureFromImage(
+            nil, cache, pixelBuffer, nil, .bgra8Unorm,
+            CVPixelBufferGetWidth(pixelBuffer),
+            CVPixelBufferGetHeight(pixelBuffer),
+            0, &cvTextureOut)
 
-        if let metalTexture = cvTextureOut {
-            texture = CVMetalTextureGetTexture(metalTexture)
-        }
+        guard result == kCVReturnSuccess,
+              let metalTexture = cvTextureOut else { return nil }
 
-        return texture
+        return CVMetalTextureGetTexture(metalTexture)
     }
 
-    func applyGrayscale(input: MTLTexture) -> MTLTexture? {
+    func applyGrayscaleAsync(input: MTLTexture, completion: @escaping (MTLTexture?) -> Void) {
+        processingQueue.async { [weak self] in
+            guard let self = self else {
+                completion(nil)
+                return
+            }
+            
+            // Process completely asynchronously
+            self.processGrayscaleAsync(input: input, completion: completion)
+        }
+    }
+    
+    private func processGrayscaleAsync(input: MTLTexture, completion: @escaping (MTLTexture?) -> Void) {
         let desc = MTLTextureDescriptor.texture2DDescriptor(
             pixelFormat: .bgra8Unorm,
             width: input.width,
             height: input.height,
             mipmapped: false)
         desc.usage = [.shaderRead, .shaderWrite]
-        guard let output = device.makeTexture(descriptor: desc) else { return nil }
+        guard let output = device.makeTexture(descriptor: desc) else { 
+            completion(nil)
+            return 
+        }
 
         guard let commandBuffer = commandQueue.makeCommandBuffer(),
               let encoder = commandBuffer.makeComputeCommandEncoder() else {
-            return nil
+            completion(nil)
+            return
         }
 
         encoder.setComputePipelineState(pipelineState)
@@ -77,9 +94,15 @@ class MetalRenderer {
 
         encoder.dispatchThreads(threadsPerGrid, threadsPerThreadgroup: threadsPerGroup)
         encoder.endEncoding()
+        
+        // Use completion handler to wait for GPU completion
+        commandBuffer.addCompletedHandler { _ in
+            completion(output)
+        }
+        
         commandBuffer.commit()
-        return output
     }
 
+    // Remove the problematic sync version completely
     var metalDevice: MTLDevice { device }
 }
