@@ -1,11 +1,3 @@
-//
-//  MetalRenderer.swift
-//  FLAM shader app
-//
-//  Created by A Avinash Chidambaram on 05/08/25.
-//
-
-
 import Metal
 import MetalKit
 import AVFoundation
@@ -32,8 +24,19 @@ class MetalRenderer {
     private var uniformBuffer: MTLBuffer!
     
     private let processingQueue = DispatchQueue(label: "MetalRenderQueue", qos: .userInitiated)
+    private let settingsQueue = DispatchQueue(label: "SettingsQueue", attributes: .concurrent)
+    private var _settings = ShaderSettings()
     
-    var settings = ShaderSettings()
+    var settings: ShaderSettings {
+        get {
+            return settingsQueue.sync { _settings }
+        }
+        set {
+            settingsQueue.async(flags: .barrier) { [weak self] in
+                self?._settings = newValue
+            }
+        }
+    }
     
     init?() {
         guard let device = MTLCreateSystemDefaultDevice(),
@@ -69,6 +72,17 @@ class MetalRenderer {
     private func setupRenderPipelines(library: MTLLibrary) {
         let descriptor = MTLRenderPipelineDescriptor()
         descriptor.colorAttachments[0].pixelFormat = .bgra8Unorm
+        
+        // Setup vertex layout
+        let vertexDescriptor = MTLVertexDescriptor()
+        vertexDescriptor.attributes[0].format = .float4
+        vertexDescriptor.attributes[0].offset = 0
+        vertexDescriptor.attributes[0].bufferIndex = 0
+        vertexDescriptor.attributes[1].format = .float2
+        vertexDescriptor.attributes[1].offset = 16
+        vertexDescriptor.attributes[1].bufferIndex = 0
+        vertexDescriptor.layouts[0].stride = 24
+        descriptor.vertexDescriptor = vertexDescriptor
         
         // Vertex shader pipelines
         if let vertexFunc = library.makeFunction(name: "warpVertexShader"),
@@ -123,7 +137,7 @@ class MetalRenderer {
     }
     
     private func setupBuffers() {
-        // Quad vertices for rendering
+        // Quad vertices for rendering (position + texCoord)
         let vertices: [Float] = [
             -1.0, -1.0, 0.0, 1.0,  0.0, 1.0,
              1.0, -1.0, 0.0, 1.0,  1.0, 1.0,
@@ -164,36 +178,47 @@ class MetalRenderer {
     }
     
     func processTextureAsync(input: MTLTexture, completion: @escaping (MTLTexture?) -> Void) {
+        // Process on dedicated queue to avoid main thread blocking
         processingQueue.async { [weak self] in
             guard let self = self else {
-                completion(nil)
+                DispatchQueue.main.async { completion(nil) }
                 return
             }
             
-            var currentTexture = input
+            let currentSettings = self.settings // Thread-safe read
+            let result = self.processTexture(input: input, settings: currentSettings)
             
-            // Apply compute shader
-            if self.settings.computeShader != .none {
-                if let processed = self.applyComputeShader(input: currentTexture) {
-                    currentTexture = processed
-                }
+            // Always return on main queue for UI updates
+            DispatchQueue.main.async {
+                completion(result)
             }
-            
-            // Apply vertex and fragment shaders
-            if self.settings.vertexShader != .none || self.settings.fragmentShader != .none {
-                if let processed = self.applyRenderShaders(input: currentTexture) {
-                    currentTexture = processed
-                }
-            }
-            
-            completion(currentTexture)
         }
     }
     
-    private func applyComputeShader(input: MTLTexture) -> MTLTexture? {
+    private func processTexture(input: MTLTexture, settings: ShaderSettings) -> MTLTexture? {
+        var currentTexture = input
+        
+        // Apply compute shader
+        if settings.computeShader != .none {
+            if let processed = applyComputeShader(input: currentTexture, shaderType: settings.computeShader) {
+                currentTexture = processed
+            }
+        }
+        
+        // Apply vertex and fragment shaders
+        if settings.vertexShader != .none || settings.fragmentShader != .none {
+            if let processed = applyRenderShaders(input: currentTexture, settings: settings) {
+                currentTexture = processed
+            }
+        }
+        
+        return currentTexture
+    }
+    
+    private func applyComputeShader(input: MTLTexture, shaderType: ComputeShaderType) -> MTLTexture? {
         let pipeline: MTLComputePipelineState?
         
-        switch settings.computeShader {
+        switch shaderType {
         case .grayscale:
             pipeline = grayscalePipeline
         case .gaussianBlur:
@@ -231,14 +256,13 @@ class MetalRenderer {
         encoder.dispatchThreads(threadsPerGrid, threadsPerThreadgroup: threadsPerGroup)
         encoder.endEncoding()
         
-        commandBuffer.addCompletedHandler { _ in }
+        // REMOVED: commandBuffer.waitUntilCompleted() - this was causing the error
         commandBuffer.commit()
-        commandBuffer.waitUntilCompleted()
         
         return output
     }
     
-    private func applyRenderShaders(input: MTLTexture) -> MTLTexture? {
+    private func applyRenderShaders(input: MTLTexture, settings: ShaderSettings) -> MTLTexture? {
         let desc = MTLTextureDescriptor.texture2DDescriptor(
             pixelFormat: .bgra8Unorm,
             width: input.width,
@@ -268,7 +292,7 @@ class MetalRenderer {
         uniformsPointer.pointee = uniforms
         
         // Choose pipeline based on settings
-        let pipeline = getRenderPipeline()
+        let pipeline = getRenderPipeline(settings: settings)
         guard let renderPipeline = pipeline else {
             renderEncoder.endEncoding()
             return input
@@ -283,14 +307,13 @@ class MetalRenderer {
         renderEncoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
         renderEncoder.endEncoding()
         
-        commandBuffer.addCompletedHandler { _ in }
+        // REMOVED: commandBuffer.waitUntilCompleted() - this was causing the error
         commandBuffer.commit()
-        commandBuffer.waitUntilCompleted()
         
         return output
     }
     
-    private func getRenderPipeline() -> MTLRenderPipelineState? {
+    private func getRenderPipeline(settings: ShaderSettings) -> MTLRenderPipelineState? {
         // Prioritize vertex shaders, then fragment shaders
         if settings.vertexShader != .none {
             switch settings.vertexShader {
@@ -324,7 +347,9 @@ class MetalRenderer {
     }
     
     func updateTime() {
-        settings.time += 0.016 // ~60fps
+        settingsQueue.async(flags: .barrier) { [weak self] in
+            self?._settings.time += 0.016 // ~60fps
+        }
     }
     
     var metalDevice: MTLDevice { device }

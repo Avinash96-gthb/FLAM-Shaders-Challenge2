@@ -13,6 +13,7 @@ class VideoCapture: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
     private let renderer = MetalRenderer()!
     private weak var drawRenderer: Renderer?
     private let metalQueue = DispatchQueue(label: "MetalProcessing", qos: .userInitiated)
+    private let sessionQueue = DispatchQueue(label: "CaptureSession", qos: .userInitiated)
     private var displayLink: CADisplayLink?
     
     func setRenderer(_ renderer: Renderer) {
@@ -20,17 +21,24 @@ class VideoCapture: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
     }
     
     func updateShaderSettings(_ settings: ShaderSettings) {
+        // Thread-safe settings update
         renderer.settings = settings
     }
     
     func startCapture() {
-        checkCameraPermission { [weak self] granted in
-            guard granted else {
-                print("Camera permission denied")
-                return
+        sessionQueue.async { [weak self] in
+            self?.checkCameraPermission { [weak self] granted in
+                guard granted else {
+                    print("Camera permission denied")
+                    return
+                }
+                self?.setupCaptureSession()
+                
+                // Start display link on main thread
+                DispatchQueue.main.async {
+                    self?.startDisplayLink()
+                }
             }
-            self?.setupCaptureSession()
-            self?.startDisplayLink()
         }
     }
     
@@ -40,6 +48,7 @@ class VideoCapture: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
     }
     
     @objc private func updateTime() {
+        // Update time in thread-safe manner
         renderer.updateTime()
     }
     
@@ -49,9 +58,7 @@ class VideoCapture: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
             completion(true)
         case .notDetermined:
             AVCaptureDevice.requestAccess(for: .video) { granted in
-                DispatchQueue.main.async {
-                    completion(granted)
-                }
+                completion(granted)
             }
         default:
             completion(false)
@@ -59,50 +66,53 @@ class VideoCapture: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
     }
     
     private func setupCaptureSession() {
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            guard let self = self else { return }
-            
-            self.captureSession.beginConfiguration()
-            self.captureSession.sessionPreset = .high
+        captureSession.beginConfiguration()
+        captureSession.sessionPreset = .high
 
-            guard let device = AVCaptureDevice.default(for: .video),
-                  let input = try? AVCaptureDeviceInput(device: device),
-                  self.captureSession.canAddInput(input) else { 
-                print("Failed to setup camera input")
-                return 
-            }
-
-            self.captureSession.addInput(input)
-
-            let output = AVCaptureVideoDataOutput()
-            output.videoSettings = [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA]
-            output.setSampleBufferDelegate(self, queue: self.metalQueue)
-            
-            if self.captureSession.canAddOutput(output) {
-                self.captureSession.addOutput(output)
-            }
-            
-            self.captureSession.commitConfiguration()
-            self.captureSession.startRunning()
+        guard let device = AVCaptureDevice.default(for: .video),
+              let input = try? AVCaptureDeviceInput(device: device),
+              captureSession.canAddInput(input) else { 
+            print("Failed to setup camera input")
+            return 
         }
+
+        captureSession.addInput(input)
+
+        let output = AVCaptureVideoDataOutput()
+        output.videoSettings = [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA]
+        output.setSampleBufferDelegate(self, queue: metalQueue)
+        
+        // Ensure we can add output
+        if captureSession.canAddOutput(output) {
+            captureSession.addOutput(output)
+        }
+        
+        captureSession.commitConfiguration()
+        captureSession.startRunning()
     }
 
     func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
+        // Use autoreleasepool to manage memory better
         autoreleasepool {
             guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer),
                   let inputTexture = renderer.makeTexture(from: pixelBuffer) else { return }
             
+            // Process asynchronously - completion already handles main queue dispatch
             renderer.processTextureAsync(input: inputTexture) { [weak self] outputTexture in
                 guard let outputTexture = outputTexture else { return }
                 
-                DispatchQueue.main.async {
-                    self?.drawRenderer?.updateTexture(outputTexture)
-                }
+                // The completion is already called on main thread from MetalRenderer
+                self?.drawRenderer?.updateTexture(outputTexture)
             }
         }
     }
 
     var metalDevice: MTLDevice {
         renderer.metalDevice
+    }
+    
+    deinit {
+        displayLink?.invalidate()
+        captureSession.stopRunning()
     }
 }

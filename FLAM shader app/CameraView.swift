@@ -32,7 +32,8 @@ struct CameraView: UIViewRepresentable {
         mtkView.isPaused = false
         mtkView.preferredFramesPerSecond = 30
 
-        DispatchQueue.main.async {
+        // Start capture after a slight delay to ensure everything is initialized
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
             self.videoCapture.startCapture()
         }
 
@@ -40,6 +41,7 @@ struct CameraView: UIViewRepresentable {
     }
 
     func updateUIView(_ uiView: MTKView, context: Context) {
+        // Update settings in thread-safe manner
         videoCapture.updateShaderSettings(shaderSettings)
     }
 }

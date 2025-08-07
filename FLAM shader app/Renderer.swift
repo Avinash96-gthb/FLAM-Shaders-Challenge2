@@ -11,7 +11,8 @@ class Renderer: NSObject, MTKViewDelegate {
     private let device: MTLDevice
     private let commandQueue: MTLCommandQueue
     private var latestTexture: MTLTexture?
-    private let textureQueue = DispatchQueue(label: "TextureQueue")
+    private let textureQueue = DispatchQueue(label: "TextureQueue", qos: .userInitiated)
+    private let drawQueue = DispatchQueue(label: "DrawQueue", qos: .userInitiated)
     private var isDrawing = false
 
     init(device: MTLDevice) {
@@ -27,6 +28,13 @@ class Renderer: NSObject, MTKViewDelegate {
     }
 
     func draw(in view: MTKView) {
+        // Use serial queue to prevent concurrent drawing issues
+        drawQueue.async { [weak self] in
+            self?.performDraw(in: view)
+        }
+    }
+    
+    private func performDraw(in view: MTKView) {
         // Prevent concurrent drawing
         guard !isDrawing else { return }
         isDrawing = true
@@ -35,6 +43,7 @@ class Renderer: NSObject, MTKViewDelegate {
         
         var currentTexture: MTLTexture?
         
+        // Use async read to avoid blocking
         textureQueue.sync {
             currentTexture = self.latestTexture
         }
@@ -61,6 +70,7 @@ class Renderer: NSObject, MTKViewDelegate {
         blitEncoder.endEncoding()
         commandBuffer.present(drawable)
         commandBuffer.commit()
+        // REMOVED: commandBuffer.waitUntilCompleted() - not needed here
     }
 
     func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {
