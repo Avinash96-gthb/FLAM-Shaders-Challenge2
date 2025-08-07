@@ -149,18 +149,20 @@ class MetalRenderer {
              1.0,  1.0, 0.0, 1.0,       1.0, 0.0     // Top-right
         ]
         
-        quadVertexBuffer = device.makeBuffer(bytes: vertices,
-                                           length: vertices.count * MemoryLayout<Float>.size,
-                                           options: [])
+        // FIXED: Create vertex buffer with exact size needed (4 vertices × 6 floats × 4 bytes = 96 bytes)
+        let vertexBufferSize = vertices.count * MemoryLayout<Float>.size
+        quadVertexBuffer = device.makeBuffer(bytes: vertices, length: vertexBufferSize, options: [])
         
-        // FIXED: Separate uniform buffer with correct size
-        uniformBuffer = device.makeBuffer(length: MemoryLayout<Uniforms>.size, options: [])
+        // FIXED: Create uniform buffer with exact Uniforms struct size (12 bytes aligned to 16)
+        let uniformSize = MemoryLayout<Uniforms>.stride
+        uniformBuffer = device.makeBuffer(length: uniformSize, options: [])
     }
     
     struct Uniforms {
-        var time: Float
-        var resolution: SIMD2<Float>
-        var warpStrength: Float
+        var time: Float        // 4 bytes
+        var resolution: SIMD2<Float>  // 8 bytes
+        var warpStrength: Float       // 4 bytes
+        // Total: 16 bytes (automatically padded by Metal)
         
         init(time: Float = 0.0, resolution: SIMD2<Float> = SIMD2<Float>(1.0, 1.0), warpStrength: Float = 0.3) {
             self.time = time
@@ -263,6 +265,11 @@ class MetalRenderer {
 
         encoder.dispatchThreads(threadsPerGrid, threadsPerThreadgroup: threadsPerGroup)
         encoder.endEncoding()
+        
+        // Use async completion instead of waitUntilCompleted
+        commandBuffer.addCompletedHandler { _ in
+            // Command completed on GPU
+        }
         commandBuffer.commit()
         
         return output
@@ -287,7 +294,7 @@ class MetalRenderer {
             return nil
         }
         
-        // FIXED: Update uniforms properly
+        // Update uniforms properly with correct size
         var uniforms = Uniforms(
             time: settings.time,
             resolution: SIMD2<Float>(Float(input.width), Float(input.height)),
@@ -305,14 +312,19 @@ class MetalRenderer {
         
         renderEncoder.setRenderPipelineState(renderPipeline)
         
-        // FIXED: Correct buffer binding - vertex buffer at index 0, uniforms at index 0 but for different stages
-        renderEncoder.setVertexBuffer(quadVertexBuffer, offset: 0, index: 0)      // Vertex data
-        renderEncoder.setVertexBuffer(uniformBuffer, offset: 0, index: 1)         // Uniforms for vertex stage
+        // FIXED: Correct buffer binding with proper sizes
+        renderEncoder.setVertexBuffer(quadVertexBuffer, offset: 0, index: 0)      // Vertex data (96 bytes)
+        renderEncoder.setVertexBuffer(uniformBuffer, offset: 0, index: 1)         // Uniforms for vertex stage (16 bytes)
         renderEncoder.setFragmentTexture(input, index: 0)                         // Input texture
-        renderEncoder.setFragmentBuffer(uniformBuffer, offset: 0, index: 0)       // Uniforms for fragment stage
+        renderEncoder.setFragmentBuffer(uniformBuffer, offset: 0, index: 0)       // Uniforms for fragment stage (16 bytes)
         
         renderEncoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
         renderEncoder.endEncoding()
+        
+        // Use async completion instead of waitUntilCompleted
+        commandBuffer.addCompletedHandler { _ in
+            // Command completed on GPU
+        }
         commandBuffer.commit()
         
         return output
