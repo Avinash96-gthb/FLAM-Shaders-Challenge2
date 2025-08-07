@@ -73,14 +73,17 @@ class MetalRenderer {
         let descriptor = MTLRenderPipelineDescriptor()
         descriptor.colorAttachments[0].pixelFormat = .bgra8Unorm
         
-        // Setup vertex layout
+        // Setup vertex layout - FIXED: Match the actual vertex data structure
         let vertexDescriptor = MTLVertexDescriptor()
+        // Position attribute (4 floats = 16 bytes)
         vertexDescriptor.attributes[0].format = .float4
         vertexDescriptor.attributes[0].offset = 0
         vertexDescriptor.attributes[0].bufferIndex = 0
+        // Texture coordinate attribute (2 floats = 8 bytes)
         vertexDescriptor.attributes[1].format = .float2
         vertexDescriptor.attributes[1].offset = 16
         vertexDescriptor.attributes[1].bufferIndex = 0
+        // Total stride = 24 bytes (16 + 8)
         vertexDescriptor.layouts[0].stride = 24
         descriptor.vertexDescriptor = vertexDescriptor
         
@@ -137,19 +140,20 @@ class MetalRenderer {
     }
     
     private func setupBuffers() {
-        // Quad vertices for rendering (position + texCoord)
+        // FIXED: Quad vertices with correct 24-byte stride (4 floats + 2 floats per vertex)
         let vertices: [Float] = [
-            -1.0, -1.0, 0.0, 1.0,  0.0, 1.0,
-             1.0, -1.0, 0.0, 1.0,  1.0, 1.0,
-            -1.0,  1.0, 0.0, 1.0,  0.0, 0.0,
-             1.0,  1.0, 0.0, 1.0,  1.0, 0.0
+            // Position (x, y, z, w)     // TexCoord (u, v)
+            -1.0, -1.0, 0.0, 1.0,       0.0, 1.0,    // Bottom-left
+             1.0, -1.0, 0.0, 1.0,       1.0, 1.0,    // Bottom-right  
+            -1.0,  1.0, 0.0, 1.0,       0.0, 0.0,    // Top-left
+             1.0,  1.0, 0.0, 1.0,       1.0, 0.0     // Top-right
         ]
         
         quadVertexBuffer = device.makeBuffer(bytes: vertices,
                                            length: vertices.count * MemoryLayout<Float>.size,
                                            options: [])
         
-        // Uniform buffer
+        // FIXED: Separate uniform buffer with correct size
         uniformBuffer = device.makeBuffer(length: MemoryLayout<Uniforms>.size, options: [])
     }
     
@@ -157,6 +161,12 @@ class MetalRenderer {
         var time: Float
         var resolution: SIMD2<Float>
         var warpStrength: Float
+        
+        init(time: Float = 0.0, resolution: SIMD2<Float> = SIMD2<Float>(1.0, 1.0), warpStrength: Float = 0.3) {
+            self.time = time
+            self.resolution = resolution
+            self.warpStrength = warpStrength
+        }
     }
     
     func makeTexture(from pixelBuffer: CVPixelBuffer) -> MTLTexture? {
@@ -178,17 +188,15 @@ class MetalRenderer {
     }
     
     func processTextureAsync(input: MTLTexture, completion: @escaping (MTLTexture?) -> Void) {
-        // Process on dedicated queue to avoid main thread blocking
         processingQueue.async { [weak self] in
             guard let self = self else {
                 DispatchQueue.main.async { completion(nil) }
                 return
             }
             
-            let currentSettings = self.settings // Thread-safe read
+            let currentSettings = self.settings
             let result = self.processTexture(input: input, settings: currentSettings)
             
-            // Always return on main queue for UI updates
             DispatchQueue.main.async {
                 completion(result)
             }
@@ -198,7 +206,7 @@ class MetalRenderer {
     private func processTexture(input: MTLTexture, settings: ShaderSettings) -> MTLTexture? {
         var currentTexture = input
         
-        // Apply compute shader
+        // Apply compute shader first
         if settings.computeShader != .none {
             if let processed = applyComputeShader(input: currentTexture, shaderType: settings.computeShader) {
                 currentTexture = processed
@@ -255,8 +263,6 @@ class MetalRenderer {
 
         encoder.dispatchThreads(threadsPerGrid, threadsPerThreadgroup: threadsPerGroup)
         encoder.endEncoding()
-        
-        // REMOVED: commandBuffer.waitUntilCompleted() - this was causing the error
         commandBuffer.commit()
         
         return output
@@ -281,7 +287,7 @@ class MetalRenderer {
             return nil
         }
         
-        // Update uniforms
+        // FIXED: Update uniforms properly
         var uniforms = Uniforms(
             time: settings.time,
             resolution: SIMD2<Float>(Float(input.width), Float(input.height)),
@@ -291,7 +297,6 @@ class MetalRenderer {
         let uniformsPointer = uniformBuffer.contents().bindMemory(to: Uniforms.self, capacity: 1)
         uniformsPointer.pointee = uniforms
         
-        // Choose pipeline based on settings
         let pipeline = getRenderPipeline(settings: settings)
         guard let renderPipeline = pipeline else {
             renderEncoder.endEncoding()
@@ -299,15 +304,15 @@ class MetalRenderer {
         }
         
         renderEncoder.setRenderPipelineState(renderPipeline)
-        renderEncoder.setVertexBuffer(quadVertexBuffer, offset: 0, index: 0)
-        renderEncoder.setVertexBuffer(uniformBuffer, offset: 0, index: 0)
-        renderEncoder.setFragmentTexture(input, index: 0)
-        renderEncoder.setFragmentBuffer(uniformBuffer, offset: 0, index: 0)
+        
+        // FIXED: Correct buffer binding - vertex buffer at index 0, uniforms at index 0 but for different stages
+        renderEncoder.setVertexBuffer(quadVertexBuffer, offset: 0, index: 0)      // Vertex data
+        renderEncoder.setVertexBuffer(uniformBuffer, offset: 0, index: 1)         // Uniforms for vertex stage
+        renderEncoder.setFragmentTexture(input, index: 0)                         // Input texture
+        renderEncoder.setFragmentBuffer(uniformBuffer, offset: 0, index: 0)       // Uniforms for fragment stage
         
         renderEncoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
         renderEncoder.endEncoding()
-        
-        // REMOVED: commandBuffer.waitUntilCompleted() - this was causing the error
         commandBuffer.commit()
         
         return output

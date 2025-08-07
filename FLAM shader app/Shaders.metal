@@ -91,8 +91,9 @@ struct Uniforms {
     float warpStrength;
 };
 
+// FIXED: Update buffer index for uniforms
 vertex VertexOut warpVertexShader(VertexIn in [[stage_in]],
-                                  constant Uniforms& uniforms [[buffer(0)]]) {
+                                  constant Uniforms& uniforms [[buffer(1)]]) {
     VertexOut out;
     
     float2 center = float2(0.5, 0.5);
@@ -109,7 +110,7 @@ vertex VertexOut warpVertexShader(VertexIn in [[stage_in]],
 }
 
 vertex VertexOut waveVertexShader(VertexIn in [[stage_in]],
-                                  constant Uniforms& uniforms [[buffer(0)]]) {
+                                  constant Uniforms& uniforms [[buffer(1)]]) {
     VertexOut out;
     
     float wave = sin(in.texCoord.x * 10.0 + uniforms.time * 2.0) * 0.05;
@@ -121,7 +122,7 @@ vertex VertexOut waveVertexShader(VertexIn in [[stage_in]],
 }
 
 vertex VertexOut sineVertexShader(VertexIn in [[stage_in]],
-                                  constant Uniforms& uniforms [[buffer(0)]]) {
+                                  constant Uniforms& uniforms [[buffer(1)]]) {
     VertexOut out;
     
     float displacement = sin(in.texCoord.y * 15.0 + uniforms.time * 3.0) * 0.03;
